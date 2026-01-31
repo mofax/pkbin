@@ -1,0 +1,11 @@
+{
+  // Example pkbin.jsonc configuration file
+  "scripts": {
+    "hello": "echo world",
+    "build": "go build ./...",
+    "test": "go test ./...",
+    "dev": "go run main.go",
+    "start": "go run cmd/server/main.go",
+    "lint": "golangci-lint run"
+  }
+}

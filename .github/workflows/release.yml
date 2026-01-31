@@ -1,0 +1,186 @@
+name: Daily Release
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      has-changes: ${{ steps.check.outputs.has-changes }}
+      date-version: ${{ steps.version.outputs.date-version }}
+      semver: ${{ steps.version.outputs.semver }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest semantic version tag
+        id: latest-semver
+        run: |
+          # Get all tags matching semantic version pattern (v0.0.0, v1.2.3, etc.)
+          LATEST_SEMVER=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n 1 || echo "")
+          if [ -z "$LATEST_SEMVER" ]; then
+            echo "No semantic version tags found, starting at v0.1.0"
+            echo "tag=" >> $GITHUB_OUTPUT
+          else
+            echo "Latest semantic version: $LATEST_SEMVER"
+            echo "tag=$LATEST_SEMVER" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for changes since last release
+        id: check
+        run: |
+          LATEST_TAG="${{ steps.latest-semver.outputs.tag }}"
+          
+          if [ -z "$LATEST_TAG" ]; then
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          MAIN_COMMIT=$(git rev-parse origin/main)
+          TAG_COMMIT=$(git rev-parse "$LATEST_TAG" 2>/dev/null || echo "")
+          
+          if [ -z "$TAG_COMMIT" ]; then
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [ "$MAIN_COMMIT" != "$TAG_COMMIT" ]; then
+            echo "Main branch has new commits"
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "No changes since last release"
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate version tags
+        id: version
+        if: steps.check.outputs.has-changes == 'true'
+        run: |
+          # Generate date-based version
+          DATE_VERSION=$(date +'v%Y.%m.%d')
+          echo "date-version=$DATE_VERSION" >> $GITHUB_OUTPUT
+          
+          # Generate semantic version (increment patch)
+          LATEST_SEMVER="${{ steps.latest-semver.outputs.tag }}"
+          if [ -z "$LATEST_SEMVER" ]; then
+            # Start at v0.1.0 if no tags exist
+            NEW_SEMVER="v0.1.0"
+          else
+            # Extract version numbers (assumes format vMAJOR.MINOR.PATCH)
+            VERSION_NUM=$(echo "$LATEST_SEMVER" | sed 's/v//')
+            MAJOR=$(echo "$VERSION_NUM" | cut -d. -f1)
+            MINOR=$(echo "$VERSION_NUM" | cut -d. -f2)
+            PATCH=$(echo "$VERSION_NUM" | cut -d. -f3)
+            
+            # Increment patch version
+            PATCH=$((PATCH + 1))
+            NEW_SEMVER="v${MAJOR}.${MINOR}.${PATCH}"
+          fi
+          
+          echo "semver=$NEW_SEMVER" >> $GITHUB_OUTPUT
+          echo "Generated date version: $DATE_VERSION"
+          echo "Generated semantic version: $NEW_SEMVER"
+
+  build:
+    needs: check-changes
+    if: needs.check-changes.outputs.has-changes == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            binary-name: pkbin-linux-amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            binary-name: pkbin-linux-arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            binary-name: pkbin-darwin-amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            binary-name: pkbin-darwin-arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.6'
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -o ${{ matrix.binary-name }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary-name }}
+          path: ${{ matrix.binary-name }}
+          retention-days: 1
+
+  release:
+    needs: [check-changes, build]
+    if: needs.check-changes.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create git tags
+        run: |
+          DATE_VERSION="${{ needs.check-changes.outputs.date-version }}"
+          SEMVER="${{ needs.check-changes.outputs.semver }}"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Create semantic version tag (for Go modules)
+          git tag -a "$SEMVER" -m "Release $SEMVER ($DATE_VERSION)"
+          git push origin "$SEMVER"
+          
+          # Create date-based tag (for GitHub releases)
+          git tag -a "$DATE_VERSION" -m "Release $DATE_VERSION ($SEMVER)"
+          git push origin "$DATE_VERSION"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-changes.outputs.semver }}
+          name: Release ${{ needs.check-changes.outputs.semver }} (${{ needs.check-changes.outputs.date-version }})
+          body: |
+            Automated daily release
+            
+            **Version:** ${{ needs.check-changes.outputs.semver }} (${{ needs.check-changes.outputs.date-version }})
+            
+            **Changes since last release:**
+            ${{ github.event.head_commit.message || 'See commit history' }}
+          files: |
+            artifacts/pkbin-linux-amd64/pkbin-linux-amd64
+            artifacts/pkbin-linux-arm64/pkbin-linux-arm64
+            artifacts/pkbin-darwin-amd64/pkbin-darwin-amd64
+            artifacts/pkbin-darwin-arm64/pkbin-darwin-arm64
+          draft: false
+          prerelease: false
