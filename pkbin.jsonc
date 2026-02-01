@@ -3,6 +3,7 @@
   "scripts": {
     "hello": "echo world",
     "build": "go build ./...",
+    "drelease": "go build -ldflags \"-X main.Version=0.0.0-dev\" -o pk .",
     "test": "go test ./...",
     "dev": "go run main.go",
     "start": "go run cmd/server/main.go",

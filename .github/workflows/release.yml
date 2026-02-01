@@ -122,7 +122,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o ${{ matrix.binary-name }} .
+        run: go build -ldflags="-X main.Version=${{ needs.check-changes.outputs.semver }}" -o ${{ matrix.binary-name }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -6,38 +6,46 @@ import (
 
 	"github.com/mofax/pkbin/internal/config"
 	"github.com/mofax/pkbin/internal/runner"
+	"github.com/spf13/cobra"
 )
 
+var Version = "dev"
+
+var rootCmd = &cobra.Command{
+	Use:   "pk <script-name>",
+	Short: "Run scripts defined in pkbin.jsonc",
+	Args:  cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		scriptName := args[0]
+
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		scriptCommand, err := cfg.FindScript(scriptName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		exitCode, err := runner.RunScript(scriptCommand)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		os.Exit(exitCode)
+	},
+}
+
+func init() {
+	rootCmd.Version = Version
+}
+
 func main() {
-	// Check if script name was provided
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: pkbin <script-name>\n")
+	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
-
-	scriptName := os.Args[1]
-
-	// Load configuration
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Find the script
-	scriptCommand, err := cfg.FindScript(scriptName)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Run the script
-	exitCode, err := runner.RunScript(scriptCommand)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Exit with the script's exit code
-	os.Exit(exitCode)
 }
